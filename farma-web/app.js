@@ -4,7 +4,57 @@ const main = document.querySelector("#main");
 const bank = window.FARMA_BANK;
 const kinds = { lesson: "Занятие", module: "Модуль", exam: "Экзамен" };
 const filters = { all: "Все тесты", lesson: "Занятия", module: "Модули", exam: "Экзамены" };
+const courseTitles = new Map([
+  ["24", "Общая фармакология"],
+  ["1", "Эфферентная нервная система"],
+  ["2", "Афферентная нервная система"],
+  ["3", "Центральная нервная система"],
+  ["4", "Сердечно-сосудистая система"],
+  ["5", "Дыхание и пищеварение"],
+  ["6", "Система крови"],
+  ["7", "Диуретики и маточные средства"],
+  ["9", "Противомикробные и противовирусные средства"],
+  ["12", "Периферическая нервная система"],
+  ["13", "Исполнительные органы"],
+]);
+
+const moduleEntries = modulesByCourse(bank?.tests ?? []);
+const catalogEntries = [
+  ...moduleEntries,
+  ...(bank?.tests ?? []).filter(test => test.kind !== "module").map(test => ({ test, title: test.title })),
+];
 let activeFilter = "all";
+
+function modulesByCourse(tests) {
+  const groups = new Map();
+  const entries = [];
+  for (const test of tests) {
+    const course = test.id.match(/^exam55-(\d+)-/)?.[1];
+    if (!course) {
+      if (test.kind === "module") entries.push({ test, title: test.title });
+      continue;
+    }
+    if (!groups.has(course)) groups.set(course, []);
+    groups.get(course).push(test);
+  }
+  for (const course of new Set([...courseTitles.keys(), ...groups.keys()])) {
+    const group = groups.get(course) ?? [];
+    const original = group.filter(test => test.kind === "module");
+    if (original.length) {
+      for (const test of original) {
+        entries.push({ test, title: courseTitles.get(course) ?? test.title });
+      }
+      continue;
+    }
+    if (!courseTitles.has(course)) continue;
+    const questions = [...new Set(group.filter(test => test.kind === "lesson").flatMap(test => test.questions))];
+    if (!questions.length) continue;
+    const title = courseTitles.get(course);
+    const test = { id: "course-" + course, title, kind: "module", sample: 30, questions };
+    entries.push({ test, title });
+  }
+  return entries;
+}
 
 function node(tag, content, attributes = {}) {
   const element = document.createElement(tag);
@@ -92,24 +142,26 @@ function catalog(focus = true) {
   const list = node("div", "", { class: "catalog-list" });
   function populate() {
     list.replaceChildren();
-    for (const test of bank.tests.filter(test => activeFilter === "all" || test.kind === activeFilter)) {
+    for (const { test, title } of catalogEntries) {
+      if (activeFilter !== "all" && test.kind !== activeFilter) continue;
       const draft = read(test, "draft");
       const result = read(test, "result");
       const info = [questions(test.questions.length)];
+      if (test.title !== title) info.unshift(test.title);
       if (draft) info.push(`Отвечено ${Object.keys(draft.answers).length} из ${draft.order.length}`);
       else if (result) info.push(`Последняя попытка — ${result.percent}%`);
-      const title = add(node("div", "", { class: "title-block" }),
-        node("h3", test.title), node("p", info.join(" · "), { class: "meta" }));
+      const titleBlock = add(node("div", "", { class: "title-block" }),
+        node("h3", title), node("p", info.join(" · "), { class: "meta" }));
       const open = link(draft ? "Продолжить" : "Открыть", "#test/" + test.id, "btn");
-      open.setAttribute("aria-label", open.textContent + " — " + test.title);
+      open.setAttribute("aria-label", open.textContent + " — " + title);
       add(list, add(node("article", "", { class: "test-row" }),
-        node("span", kinds[test.kind], { class: "kind" }), title, open));
+        node("span", kinds[test.kind], { class: "kind" }), titleBlock, open));
     }
     if (!list.childElementCount) add(list, node("p", "В этой категории пока нет тестов.", { class: "empty" }));
   }
 
   for (const [value, label] of Object.entries(filters)) {
-    if (value !== "all" && !bank.tests.some(test => test.kind === value)) continue;
+    if (value !== "all" && !catalogEntries.some(({ test }) => test.kind === value)) continue;
     const control = node("button", label, { type: "button", class: "filter", "aria-pressed": String(value === activeFilter) });
     control.addEventListener("click", () => {
       activeFilter = value;
@@ -142,6 +194,10 @@ function start(test, order) {
 function overview(test) {
   const { page, card } = panel();
   add(card, node("h1", test.title), node("p", kinds[test.kind] + " · " + questions(test.questions.length)));
+  const hasMultiple = test.questions.some(id => bank.questions[id].correct.length > 1);
+  add(card, node("p", hasMultiple
+    ? "Вопрос засчитывается, если выбраны все верные варианты и ни одного лишнего."
+    : "В каждом вопросе можно выбрать один ответ."));
   const draft = read(test, "draft");
   const result = read(test, "result");
   if (draft) {
@@ -308,7 +364,7 @@ function route() {
     catalog(Boolean(hash));
     return;
   }
-  const test = bank.tests.find(item => hash === "#test/" + item.id);
+  const test = catalogEntries.find(({ test }) => hash === "#test/" + test.id)?.test;
   if (test) overview(test);
   else show(add(node("div"), node("h1", "Тест не найден"), link("К каталогу тестов", "#catalog", "back")));
 }
