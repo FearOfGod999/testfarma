@@ -93,7 +93,7 @@ function plural(count, forms) {
 }
 
 function questions(count) {
-  return count + " " + plural(count, ["вопрос", "вопроса", "вопросов"]);
+  return count.toLocaleString("ru") + " " + plural(count, ["вопрос", "вопроса", "вопросов"]);
 }
 
 function score(result) {
@@ -135,6 +135,7 @@ function read(test, type) {
 
 function write(test, type, value) {
   const key = storagePrefix + test.id + "." + type;
+  if (type === "draft" && value) value.updatedAt = Date.now();
   sessions.set(key, value);
   try {
     if (value === null) localStorage.removeItem(key);
@@ -163,11 +164,32 @@ function panel() {
 function catalog(focus = true) {
   const page = node("div");
   const hero = node("section", "", { class: "intro" });
-  const detail = add(node("div"), node("h1", "Практикум по фармакологии"),
-    node("p", "Тренируйтесь по занятиям и модулям. Проверяйте ответы в процессе и возвращайтесь к ошибкам после попытки."));
-  const summary = add(node("div", "", { class: "intro-summary" }),
-    add(node("p"), node("strong", Object.keys(bank.questions).length.toLocaleString("ru")), "вопросов в банке"),
-    add(node("p"), node("strong", passMark + "%"), "проходной балл"));
+  const lessons = catalogEntries.filter(({ test }) => test.kind === "lesson").length;
+  const stats = add(node("div", "", { class: "intro-stats" }),
+    node("span", moduleEntries.length + " " + plural(moduleEntries.length, ["модуль", "модуля", "модулей"])),
+    node("span", lessons + " " + plural(lessons, ["занятие", "занятия", "занятий"])),
+    node("span", questions(Object.keys(bank.questions).length)));
+  const detail = add(node("div", "", { class: "intro-copy" }),
+    node("h1", "Практикум по фармакологии"),
+    node("p", "Решайте тесты по темам и возвращайтесь к вопросам, в которых ошиблись."), stats);
+  let resume;
+  for (const { test, title } of catalogEntries) {
+    const draft = read(test, "draft");
+    if (draft && (!resume || (draft.updatedAt ?? 0) > (resume.draft.updatedAt ?? 0))) resume = { test, title, draft };
+  }
+  const summary = node("aside", "", { class: "intro-summary" });
+  if (resume) {
+    const { test, title, draft } = resume;
+    const answered = Object.keys(draft.answers).length;
+    add(summary, node("h2", "Продолжить попытку"), node("p", title, { class: "resume-title" }),
+      node("progress", "", { max: draft.order.length, value: answered, "aria-label": "Отвечено в текущей попытке" }),
+      node("p", `Отвечено ${answered} из ${draft.order.length}`),
+      link("Продолжить", "#test/" + test.id + "/resume", "btn"));
+  } else {
+    add(summary, node("h2", "Начать тренировку"),
+      node("p", `Проверяйте ответы по ходу теста. Проходной балл — ${passMark}%.`),
+      link("Выбрать модуль", "#catalog/module", "btn"));
+  }
   add(hero, detail, summary);
 
   const controls = node("div", "", { class: "filters", role: "group", "aria-label": "Тип теста" });
@@ -177,7 +199,7 @@ function catalog(focus = true) {
   const searchField = add(node("div", "", { class: "search-field" }), search);
   const found = node("p", "", { class: "catalog-status", "aria-live": "polite" });
   const list = node("div", "", { class: "catalog-list" });
-  function populate() {
+  function populate(animate = false) {
     list.replaceChildren();
     for (const { test, title } of catalogEntries) {
       if (activeFilter !== "all" && test.kind !== activeFilter) continue;
@@ -185,7 +207,7 @@ function catalog(focus = true) {
       const draft = read(test, "draft");
       const result = read(test, "result");
       const info = [questions(test.questions.length)];
-      if (test.title !== title) info.unshift(test.title);
+      if (test.title !== title && !test.title.startsWith(title)) info.unshift(test.title);
       if (draft) info.push(`Отвечено ${Object.keys(draft.answers).length} из ${draft.order.length}`);
       else if (result) info.push(`Последняя попытка — ${score(result)}`);
       const titleBlock = add(node("div", "", { class: "title-block" }),
@@ -200,6 +222,10 @@ function catalog(focus = true) {
     if (!count) add(list, node("p", searchQuery.trim()
       ? "По этому запросу тестов нет. Попробуйте другое название или выберите «Все тесты»."
       : "В этой категории пока нет тестов.", { class: "empty" }));
+    if (animate && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      list.animate([{ opacity: .68, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }],
+        { duration: 180, easing: "cubic-bezier(.16, 1, .3, 1)" });
+    }
   }
 
   search.addEventListener("input", () => {
@@ -217,14 +243,14 @@ function catalog(focus = true) {
         // Some local-file viewers disallow History API writes.
       }
       for (const item of controls.children) item.setAttribute("aria-pressed", String(item === control));
-      populate();
+      populate(true);
     });
     add(controls, control);
   }
   populate();
   add(page, hero, add(node("section", "", { "aria-labelledby": "catalog-title" }),
-    add(node("div", "", { class: "catalog-head" }), catalogTitle, searchField),
-    controls, found, list));
+    add(node("div", "", { class: "catalog-head" }), catalogTitle),
+    add(node("div", "", { class: "catalog-toolbar" }), controls, searchField), found, list));
   show(page, focus);
   if (focus && activeFilter !== "all") {
     catalogTitle.focus({ preventScroll: true });
@@ -285,8 +311,11 @@ function overview(test) {
   show(page);
 }
 
-function quiz(test, draft, jumpOpen = false) {
+function quiz(test, draft, jumpOpen, direction = "forward") {
   const { page, card } = panel();
+  page.classList.add("quiz-page");
+  card.classList.add("quiz-surface");
+  card.dataset.direction = direction;
   const currentId = draft.order[draft.index];
   const question = bank.questions[currentId];
   draft.checked ??= {};
@@ -300,7 +329,8 @@ function quiz(test, draft, jumpOpen = false) {
 
   const fieldset = node("fieldset");
   const multi = question.correct.length > 1;
-  add(fieldset, node("legend", multi ? "Отметьте все подходящие варианты" : "Выберите один вариант"));
+  const instruction = node("legend", multi ? "Отметьте все подходящие варианты" : "Выберите один вариант");
+  add(fieldset, instruction);
   const options = question.options.map((option, index) => {
     const input = node("input", "", { type: multi ? "checkbox" : "radio", name: "answer", value: index });
     input.checked = (draft.answers[currentId] ?? []).includes(index);
@@ -310,14 +340,16 @@ function quiz(test, draft, jumpOpen = false) {
     add(fieldset, label);
     return { input, label, state };
   });
-  add(card, add(node("div", "", { class: "question" }), node("h1", question.text), fieldset));
   const feedback = node("div", "", { class: "feedback", role: "status", "aria-atomic": "true" });
-  add(card, feedback);
+  add(card, add(node("div", "", { class: "question" }), node("h1", question.text), feedback, fieldset));
+  const sourceNote = node("p", question.note, { class: "source-note", hidden: "" });
+  if (question.note) add(card, sourceNote);
 
-  function move(index, keepJump = false) {
+  function move(index) {
+    const direction = index < draft.index ? "backward" : "forward";
     draft.index = index;
     write(test, "draft", draft);
-    quiz(test, draft, keepJump);
+    quiz(test, draft, jump.open, direction);
   }
 
   function finish() {
@@ -347,16 +379,23 @@ function quiz(test, draft, jumpOpen = false) {
   add(card, actions);
 
   const jump = node("details", "", { class: "jump" });
-  jump.open = jumpOpen;
+  jump.open = jumpOpen ?? matchMedia("(min-width: 58rem)").matches;
   const jumpList = node("div", "", { class: "jump-list" });
   const jumpButtons = draft.order.map((id, index) => {
     const target = node("button", String(index + 1), { type: "button" });
-    target.addEventListener("click", () => move(index, true));
+    target.addEventListener("click", () => {
+      if (index !== draft.index) move(index);
+    });
     if (id === currentId) target.setAttribute("aria-current", "step");
     add(jumpList, target);
     return target;
   });
-  add(card, add(jump, node("summary", "Перейти к вопросу"), jumpList));
+  const jumpLegend = add(node("div", "", { class: "jump-legend" }),
+    node("span", "Верно", { "data-status": "correct" }),
+    node("span", "Ошибка", { "data-status": "incorrect" }),
+    node("span", "Без ответа", { "data-status": "empty" }));
+  add(jump, node("summary", "Карта вопросов"), jumpList, jumpLegend);
+  add(page, add(node("div", "", { class: "quiz-layout" }), card, jump));
   function updateJump() {
     jumpButtons.forEach((target, index) => {
       const id = draft.order[index];
@@ -376,6 +415,7 @@ function quiz(test, draft, jumpOpen = false) {
     forward.textContent = !checked && selected.length ? "Проверить ответ"
       : last ? "Завершить тест" : checked ? "Далее" : "Пропустить";
     if (!checked) return;
+    instruction.textContent = "Разбор вариантов";
     for (const [index, { input, label, state }] of options.entries()) {
       input.disabled = true;
       const key = question.correct.includes(index);
@@ -388,7 +428,7 @@ function quiz(test, draft, jumpOpen = false) {
     feedback.dataset.result = correct ? "correct" : "incorrect";
     feedback.replaceChildren(node("strong", correct ? "Ответ верный" : "Ответ неверный"));
     if (!correct && multi) add(feedback, node("span", "Засчитывается только точный набор верных вариантов."));
-    if (question.note) add(feedback, node("span", question.note));
+    if (question.note) sourceNote.hidden = false;
   }
 
   function checkAnswer() {
@@ -507,8 +547,13 @@ function route() {
     return;
   }
   for (const item of document.querySelectorAll(".top-nav a")) item.removeAttribute("aria-current");
-  const test = catalogEntries.find(({ test }) => hash === "#test/" + test.id)?.test;
-  if (test) overview(test);
+  const match = hash.match(/^#test\/([^/]+)(\/resume)?$/);
+  const test = catalogEntries.find(({ test }) => test.id === match?.[1])?.test;
+  const draft = test && match[2] ? read(test, "draft") : null;
+  if (test && draft) {
+    try { history.replaceState(null, "", "#test/" + test.id); } catch { /* local-file restrictions */ }
+    quiz(test, draft);
+  } else if (test) overview(test);
   else show(add(node("div"), node("h1", "Тест не найден"), link("К каталогу тестов", "#catalog", "back")));
 }
 
