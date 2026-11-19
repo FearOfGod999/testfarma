@@ -267,8 +267,20 @@ function shuffled(items) {
   return order;
 }
 
-function start(test, order) {
-  const draft = { order, answers: {}, checked: {}, index: 0 };
+function sourceOptionOrder(id) {
+  return bank.questions[id].options.map((_, index) => index);
+}
+
+function optionOrder(attempt, id) {
+  return attempt.optionOrders?.[id] ?? sourceOptionOrder(id);
+}
+
+function start(test, order, mixAnswers) {
+  // Only the display order is shuffled. Selections still use the source indices.
+  const optionOrders = mixAnswers
+    ? Object.fromEntries(order.map(id => [id, shuffled(sourceOptionOrder(id))]))
+    : null;
+  const draft = { order, optionOrders, answers: {}, checked: {}, index: 0 };
   write(test, "draft", draft);
   quiz(test, draft);
 }
@@ -298,12 +310,14 @@ function overview(test) {
     if (test.sample > 0 && test.sample < test.questions.length) add(length, node("option", questions(test.sample), { value: test.sample }));
     add(length, node("option", `Все вопросы (${test.questions.length})`, { value: test.questions.length }));
     const mix = node("input", "", { type: "checkbox", checked: "" });
+    const mixAnswers = node("input", "", { type: "checkbox", checked: "" });
     const setup = add(node("div", "", { class: "setup" }),
       add(node("label", "Размер попытки"), length),
-      add(node("label"), mix, "Перемешать вопросы"));
+      add(node("label"), mix, "Перемешать вопросы"),
+      add(node("label"), mixAnswers, "Перемешать варианты ответов"));
     const actions = add(node("div", "", { class: "actions" }), button("Начать тест", () => {
       const order = mix.checked ? shuffled(test.questions) : test.questions;
-      start(test, order.slice(0, Number(length.value)));
+      start(test, order.slice(0, Number(length.value)), mixAnswers.checked);
     }));
     if (result) add(actions, button(`Последний результат — ${score(result)}`, () => results(test, result), true));
     add(card, setup, actions);
@@ -331,14 +345,14 @@ function quiz(test, draft, jumpOpen, direction = "forward", notice = "") {
   const multi = question.correct.length > 1;
   const instruction = node("legend", multi ? "Отметьте все подходящие варианты" : "Выберите один вариант");
   add(fieldset, instruction);
-  const options = question.options.map((option, index) => {
+  const options = optionOrder(draft, currentId).map(index => {
     const input = node("input", "", { type: multi ? "checkbox" : "radio", name: "answer", value: index });
     input.checked = (draft.answers[currentId] ?? []).includes(index);
     const state = node("span", "", { class: "option-state" });
     const label = add(node("label", "", { class: "option" }), input,
-      add(node("span", "", { class: "option-copy" }), node("span", option), state));
+      add(node("span", "", { class: "option-copy" }), node("span", question.options[index]), state));
     add(fieldset, label);
-    return { input, label, state };
+    return { input, label, state, index };
   });
   const feedback = node("div", "", { class: "feedback", role: "status", "aria-atomic": "true" });
   if (notice) add(feedback, node("p", notice, { class: "muted" }));
@@ -418,7 +432,7 @@ function quiz(test, draft, jumpOpen, direction = "forward", notice = "") {
       : last ? "Завершить тест" : checked ? "Далее" : "Пропустить";
     if (!checked) return;
     instruction.textContent = "Разбор вариантов";
-    for (const [index, { input, label, state }] of options.entries()) {
+    for (const { input, label, state, index } of options) {
       input.disabled = true;
       const key = question.correct.includes(index);
       const chosen = selected.includes(index);
@@ -442,7 +456,7 @@ function quiz(test, draft, jumpOpen, direction = "forward", notice = "") {
   }
 
   fieldset.addEventListener("change", () => {
-    const values = options.flatMap(({ input }, index) => input.checked ? [index] : []);
+    const values = options.flatMap(({ input, index }) => input.checked ? [index] : []);
     if (values.length) draft.answers[currentId] = values;
     else delete draft.answers[currentId];
     count.textContent = `Отвечено ${Object.keys(draft.answers).length} из ${total}`;
@@ -476,7 +490,9 @@ function results(test, result) {
   if (skipped) add(summary, node("p", `Без ответа: ${skipped}`));
   add(card, node("h1", "Результат теста"), node("p", test.title), summary);
   const actions = node("div", "", { class: "actions" });
-  if (wrong.length && !read(test, "draft")) add(actions, button("Повторить ошибки", () => start(test, wrong)));
+  if (wrong.length && !read(test, "draft")) {
+    add(actions, button("Повторить ошибки", () => start(test, wrong, Boolean(result.optionOrders))));
+  }
   add(actions, button("К настройкам теста", () => overview(test), true));
   const review = add(node("section", "", { class: "review", "aria-label": "Разбор ответов" }), node("h2", "Разбор ответов"));
   const answers = node("div");
@@ -515,13 +531,13 @@ function results(test, result) {
       const entry = add(node("details"), add(node("summary"), node("span", `${index + 1}. ${question.text}`), status));
       entry.addEventListener("toggle", updateExpand);
       const options = node("ul");
-      question.options.forEach((option, optionIndex) => {
+      for (const optionIndex of optionOrder(result, id)) {
         const key = question.correct.includes(optionIndex);
         const chosen = selected.includes(optionIndex);
         const description = [key && "правильный ответ", chosen && "вы выбрали"].filter(Boolean).join(", ");
-        add(options, node("li", option + (description ? ` — ${description}` : ""),
+        add(options, node("li", question.options[optionIndex] + (description ? ` — ${description}` : ""),
           { class: key ? "correct" : chosen ? "incorrect" : "" }));
-      });
+      }
       add(entry, options);
       if (question.note) add(entry, node("p", question.note));
       add(answers, entry);
