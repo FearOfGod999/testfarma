@@ -279,7 +279,7 @@ function overview(test) {
   const hasMultiple = test.questions.some(id => bank.questions[id].correct.length > 1);
   add(card, node("p", hasMultiple
     ? "Если можно выбрать несколько ответов, отметьте подходящие и нажмите «Проверить ответ». Балл даётся за точный набор."
-    : "Проверка появится сразу после выбора ответа."));
+    : "Выберите вариант и нажмите «Проверить ответ»."));
   add(card, node("p", "Проходной балл — " + passMark + "%.", { class: "tint-note" }));
   const draft = read(test, "draft");
   const result = read(test, "result");
@@ -311,7 +311,7 @@ function overview(test) {
   show(page);
 }
 
-function quiz(test, draft, jumpOpen, direction = "forward") {
+function quiz(test, draft, jumpOpen, direction = "forward", notice = "") {
   const { page, card } = panel();
   page.classList.add("quiz-page");
   card.classList.add("quiz-surface");
@@ -341,20 +341,22 @@ function quiz(test, draft, jumpOpen, direction = "forward") {
     return { input, label, state };
   });
   const feedback = node("div", "", { class: "feedback", role: "status", "aria-atomic": "true" });
+  if (notice) add(feedback, node("p", notice, { class: "muted" }));
   add(card, add(node("div", "", { class: "question" }), node("h1", question.text), feedback, fieldset));
   const sourceNote = node("p", question.note, { class: "source-note", hidden: "" });
   if (question.note) add(card, sourceNote);
 
-  function move(index) {
+  function move(index, notice) {
     const direction = index < draft.index ? "backward" : "forward";
     draft.index = index;
     write(test, "draft", draft);
-    quiz(test, draft, jump.open, direction);
+    quiz(test, draft, jump.open, direction, notice);
   }
 
   function finish() {
-    if (draft.answers[currentId]?.length && !draft.checked[currentId]) {
-      checkAnswer();
+    const pending = draft.order.findIndex(id => draft.answers[id]?.length && !draft.checked[id]);
+    if (pending !== -1) {
+      move(pending, "Перед завершением нажмите «Проверить ответ».");
       return;
     }
     const unanswered = total - Object.keys(draft.answers).length;
@@ -445,12 +447,9 @@ function quiz(test, draft, jumpOpen, direction = "forward") {
     else delete draft.answers[currentId];
     count.textContent = `Отвечено ${Object.keys(draft.answers).length} из ${total}`;
     progress.value = Object.keys(draft.answers).length;
-    if (!multi && values.length) checkAnswer();
-    else {
-      write(test, "draft", draft);
-      renderAnswerState();
-      updateJump();
-    }
+    write(test, "draft", draft);
+    renderAnswerState();
+    updateJump();
   });
   show(page);
   renderAnswerState();
